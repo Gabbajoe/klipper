@@ -129,9 +129,15 @@ class ProbeCommandHelper:
         # Probe bed sample_count times
         probe_session = self.probe.start_probe_session(fo_gcmd)
         probe_num = 0
+        first_probe = True
         while probe_num < sample_count:
             # Probe position
             probe_session.run_probe(fo_gcmd)
+            if self.probe.drop_first_result and first_probe:
+                first_probe = False
+                liftpos = [None, None, pos[2] + params['sample_retract_dist']]
+                self._move(liftpos, params['lift_speed'])
+                continue
             probe_num += 1
             # Retract
             pos = toolhead.get_position()
@@ -230,8 +236,9 @@ class HomingViaProbeHelper:
 
 # Helper to track multiple probe attempts in a single command
 class ProbeSessionHelper:
-    def __init__(self, config, mcu_probe):
+    def __init__(self, config, probe, mcu_probe):
         self.printer = config.get_printer()
+        self.probe = probe
         self.mcu_probe = mcu_probe
         gcode = self.printer.lookup_object('gcode')
         self.dummy_gcode_cmd = gcode.create_gcode_command("", "", {})
@@ -336,10 +343,16 @@ class ProbeSessionHelper:
         probexy = toolhead.get_position()[:2]
         retries = 0
         positions = []
+        first_probe = True
         sample_count = params['samples']
         while len(positions) < sample_count:
             # Probe position
             pos = self._probe(params['probe_speed'])
+            if self.probe.drop_first_result and first_probe:
+                first_probe = False
+                liftpos = [None, None, pos[2] + params['sample_retract_dist']]
+                toolhead.manual_move(liftpos, params['lift_speed'])
+                continue
             positions.append(pos)
             # Check samples tolerance
             z_positions = [p[2] for p in positions]
@@ -562,11 +575,12 @@ class ProbeEndstopWrapper:
 class PrinterProbe:
     def __init__(self, config):
         self.printer = config.get_printer()
+        self.drop_first_result = config.getboolean('drop_first_result', False)        
         self.mcu_probe = ProbeEndstopWrapper(config)
         self.cmd_helper = ProbeCommandHelper(config, self,
                                              self.mcu_probe.query_endstop)
         self.probe_offsets = ProbeOffsetsHelper(config)
-        self.probe_session = ProbeSessionHelper(config, self.mcu_probe)
+        self.probe_session = ProbeSessionHelper(config, self, self.mcu_probe)
     def get_probe_params(self, gcmd=None):
         return self.probe_session.get_probe_params(gcmd)
     def get_offsets(self):
